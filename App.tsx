@@ -1,31 +1,86 @@
-
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { BOOK_DATA } from './constants';
 import { generateIllustration, generateNarration } from './services/gemini';
 import { LoadingSpinner } from './components/LoadingSpinner';
 
+const PROGRESS_KEY = 'davi-reading-progress-v1';
+const BOOKMARKS_KEY = 'davi-reading-bookmarks-v1';
+const FONT_KEY = 'davi-font-scale-v1';
+
 const App: React.FC = () => {
+  const [hasStarted, setHasStarted] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [illustrations, setIllustrations] = useState<Record<number, string>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isNarrating, setIsNarrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+  const [fontScale, setFontScale] = useState<'normal' | 'large'>('normal');
+  const [readPages, setReadPages] = useState<number[]>([]);
+  const [bookmarks, setBookmarks] = useState<number[]>([]);
+
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   const page = BOOK_DATA[currentPage];
 
+  const completion = useMemo(
+    () => Math.min(100, Math.round((readPages.length / BOOK_DATA.length) * 100)),
+    [readPages.length],
+  );
+
+  useEffect(() => {
+    try {
+      const savedProgress = localStorage.getItem(PROGRESS_KEY);
+      const savedBookmarks = localStorage.getItem(BOOKMARKS_KEY);
+      const savedFont = localStorage.getItem(FONT_KEY) as 'normal' | 'large' | null;
+
+      if (savedProgress) {
+        const parsed = JSON.parse(savedProgress) as { currentPage: number; readPages: number[]; hasStarted: boolean };
+        setCurrentPage(Math.min(Math.max(parsed.currentPage ?? 0, 0), BOOK_DATA.length - 1));
+        setReadPages(Array.isArray(parsed.readPages) ? parsed.readPages : []);
+        setHasStarted(Boolean(parsed.hasStarted));
+      }
+      if (savedBookmarks) {
+        const parsedBookmarks = JSON.parse(savedBookmarks) as number[];
+        setBookmarks(Array.isArray(parsedBookmarks) ? parsedBookmarks : []);
+      }
+      if (savedFont === 'normal' || savedFont === 'large') {
+        setFontScale(savedFont);
+      }
+    } catch (storageError) {
+      console.warn('Não foi possível carregar o progresso salvo.', storageError);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      PROGRESS_KEY,
+      JSON.stringify({ currentPage, readPages, hasStarted }),
+    );
+  }, [currentPage, readPages, hasStarted]);
+
+  useEffect(() => {
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+  }, [bookmarks]);
+
+  useEffect(() => {
+    localStorage.setItem(FONT_KEY, fontScale);
+  }, [fontScale]);
+
+  const markCurrentPageAsRead = useCallback(() => {
+    setReadPages(prev => (prev.includes(currentPage) ? prev : [...prev, currentPage]));
+  }, [currentPage]);
+
   const handleGenerateIllustration = useCallback(async (index: number) => {
     if (illustrations[index]) return;
-    
+
     setIsLoading(true);
     setError(null);
     try {
       const imageUrl = await generateIllustration(BOOK_DATA[index].illustrationPrompt);
       setIllustrations(prev => ({ ...prev, [index]: imageUrl }));
     } catch (err: any) {
-      setError("Ops! O anjo das artes está ocupado. Tente novamente em instantes.");
+      setError('Ops! O anjo das artes está ocupado. Tente novamente em instantes.');
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -65,8 +120,10 @@ const App: React.FC = () => {
   }, [page.content, isNarrating, stopNarration]);
 
   useEffect(() => {
+    if (!hasStarted) return;
     handleGenerateIllustration(currentPage);
-  }, [currentPage, handleGenerateIllustration]);
+    markCurrentPageAsRead();
+  }, [currentPage, handleGenerateIllustration, hasStarted, markCurrentPageAsRead]);
 
   const nextPage = () => {
     if (currentPage < BOOK_DATA.length - 1) {
@@ -82,25 +139,110 @@ const App: React.FC = () => {
     }
   };
 
+  const jumpToPage = (index: number) => {
+    stopNarration();
+    setCurrentPage(index);
+  };
+
+  const toggleBookmark = () => {
+    setBookmarks(prev => (prev.includes(currentPage) ? prev.filter(p => p !== currentPage) : [...prev, currentPage]));
+  };
+
+  const clearProgress = () => {
+    stopNarration();
+    setCurrentPage(0);
+    setReadPages([]);
+    setBookmarks([]);
+    setHasStarted(false);
+  };
+
+  const textSizeClass = fontScale === 'large' ? 'text-lg md:text-xl' : 'text-base md:text-lg';
+
+  if (!hasStarted) {
+    return (
+      <div className="min-h-screen bg-[#fdfbf7] flex flex-col items-center justify-center p-6 text-center">
+        <h1 className="text-4xl md:text-6xl font-cursive text-amber-900 mb-4">A Aquarela de Davi</h1>
+        <p className="text-amber-800 max-w-2xl mb-8">
+          Sistema completo de leitura infantil com progresso automático, marcadores, narração e ilustrações com IA.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-4">
+          <button
+            onClick={() => setHasStarted(true)}
+            className="px-8 py-3 bg-amber-600 text-white rounded-full hover:bg-amber-700 transition shadow-md"
+          >
+            {readPages.length > 0 ? 'Continuar Leitura' : 'Iniciar Jornada'}
+          </button>
+          <button
+            onClick={clearProgress}
+            className="px-8 py-3 bg-white text-amber-700 rounded-full border border-amber-200 hover:bg-amber-50 transition"
+          >
+            Reiniciar Tudo
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#fdfbf7] flex flex-col items-center justify-center p-4 md:p-8">
-      {/* Header */}
-      <header className="mb-8 text-center">
-        <h1 className="text-4xl md:text-5xl font-cursive text-amber-900 mb-2">A Aquarela de Davi</h1>
-        <p className="text-amber-700 font-medium tracking-wide">Um Livro de Fé e Cores</p>
+      <header className="w-full max-w-5xl mb-4 md:mb-6">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-cursive text-amber-900">A Aquarela de Davi</h1>
+            <p className="text-amber-700 font-medium tracking-wide">Leitor inteligente com progresso salvo</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setFontScale(prev => (prev === 'normal' ? 'large' : 'normal'))}
+              className="px-4 py-2 rounded-full bg-white border border-amber-200 text-amber-700 text-sm"
+            >
+              Fonte: {fontScale === 'normal' ? 'Normal' : 'Grande'}
+            </button>
+            <button
+              onClick={clearProgress}
+              className="px-4 py-2 rounded-full bg-white border border-red-200 text-red-600 text-sm"
+            >
+              Resetar
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-4 border border-amber-100 shadow-sm">
+          <div className="flex justify-between text-xs text-amber-600 font-semibold mb-1">
+            <span>Progresso de leitura</span>
+            <span>{completion}%</span>
+          </div>
+          <div className="w-full h-2 bg-amber-100 rounded-full overflow-hidden">
+            <div className="h-full bg-amber-500 transition-all" style={{ width: `${completion}%` }} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {BOOK_DATA.map((item, index) => (
+              <button
+                key={item.id}
+                onClick={() => jumpToPage(index)}
+                className={`px-3 py-1 rounded-full text-xs border transition ${
+                  index === currentPage
+                    ? 'bg-amber-500 text-white border-amber-500'
+                    : readPages.includes(index)
+                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                      : 'bg-white text-amber-500 border-amber-100'
+                }`}
+              >
+                Página {item.pageNumber}
+              </button>
+            ))}
+          </div>
+        </div>
       </header>
 
-      {/* Book Container */}
       <main className="relative w-full max-w-5xl aspect-[4/3] md:aspect-[16/9] bg-white rounded-xl shadow-2xl overflow-hidden border-8 border-amber-100 flex flex-col md:flex-row">
-        
-        {/* Left Side: Illustration */}
         <div className="w-full md:w-1/2 h-1/2 md:h-full bg-amber-50 relative flex items-center justify-center border-b md:border-b-0 md:border-r border-amber-100 p-4">
           {isLoading ? (
             <LoadingSpinner />
           ) : illustrations[currentPage] ? (
-            <img 
-              src={illustrations[currentPage]} 
-              alt="Ilustração da página" 
+            <img
+              src={illustrations[currentPage]}
+              alt="Ilustração da página"
               className="w-full h-full object-contain rounded shadow-sm animate-in fade-in duration-1000"
             />
           ) : (
@@ -112,7 +254,7 @@ const App: React.FC = () => {
             <div className="absolute inset-0 bg-white/90 flex items-center justify-center p-8 text-center z-10">
               <div className="space-y-4">
                 <p className="text-red-600 font-medium">{error}</p>
-                <button 
+                <button
                   onClick={() => handleGenerateIllustration(currentPage)}
                   className="px-6 py-2 bg-amber-600 text-white rounded-full hover:bg-amber-700 transition shadow-md"
                 >
@@ -123,7 +265,6 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* Right Side: Text & Story */}
         <div className="w-full md:w-1/2 h-1/2 md:h-full p-6 md:p-10 flex flex-col justify-between bg-white bg-[url('https://www.transparenttextures.com/patterns/parchment.png')]">
           <div>
             <div className="flex justify-between items-center mb-4">
@@ -131,78 +272,72 @@ const App: React.FC = () => {
                 <span className="text-amber-500 font-bold text-sm tracking-widest uppercase">Página {page.pageNumber}</span>
                 <span className="text-xs text-amber-400 italic font-medium">{page.bibleReference}</span>
               </div>
-              <button 
-                onClick={handleNarrate}
-                className={`p-3 rounded-full transition-all duration-300 ${isNarrating ? 'bg-amber-500 text-white shadow-lg scale-110 ring-4 ring-amber-100' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}
-                title={isNarrating ? "Parar Narração" : "Ouvir História"}
-              >
-                {isNarrating ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                  </svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5L6 9H2v6h4l5 4V5z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
-                  </svg>
-                )}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={toggleBookmark}
+                  className={`p-3 rounded-full ${bookmarks.includes(currentPage) ? 'bg-amber-500 text-white' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'} transition-all`}
+                  title="Favoritar página"
+                >
+                  ★
+                </button>
+                <button
+                  onClick={handleNarrate}
+                  className={`p-3 rounded-full transition-all duration-300 ${isNarrating ? 'bg-amber-500 text-white shadow-lg scale-110 ring-4 ring-amber-100' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}
+                  title={isNarrating ? 'Parar Narração' : 'Ouvir História'}
+                >
+                  🔊
+                </button>
+              </div>
             </div>
 
             <h2 className="text-2xl md:text-3xl font-bold text-amber-900 mb-5 leading-tight">{page.title}</h2>
-            
-            <div className="space-y-4 text-amber-950 text-base md:text-lg leading-relaxed whitespace-pre-wrap">
+
+            <div className={`space-y-4 text-amber-950 leading-relaxed whitespace-pre-wrap ${textSizeClass}`}>
               {page.content}
             </div>
           </div>
 
           <div className="mt-6 pt-6 border-t border-amber-100">
-             <div className="bg-amber-50 p-4 rounded-lg border-l-4 border-amber-400 shadow-sm">
-               <div className="flex justify-between items-start mb-1">
-                 <span className="block text-[10px] uppercase tracking-[0.2em] text-amber-600 font-black">📖 Lição</span>
-                 <span className="text-[10px] font-bold text-amber-400 px-2 py-0.5 bg-white rounded-full border border-amber-100">{page.bibleReference}</span>
-               </div>
-               <p className="text-amber-800 font-semibold italic text-sm md:text-base leading-snug">{page.lesson}</p>
-             </div>
+            <div className="bg-amber-50 p-4 rounded-lg border-l-4 border-amber-400 shadow-sm">
+              <div className="flex justify-between items-start mb-1">
+                <span className="block text-[10px] uppercase tracking-[0.2em] text-amber-600 font-black">📖 Lição</span>
+                <span className="text-[10px] font-bold text-amber-400 px-2 py-0.5 bg-white rounded-full border border-amber-100">{page.bibleReference}</span>
+              </div>
+              <p className="text-amber-800 font-semibold italic text-sm md:text-base leading-snug">{page.lesson}</p>
+            </div>
           </div>
         </div>
       </main>
 
-      {/* Navigation Controls */}
       <div className="mt-10 flex items-center space-x-8">
-        <button 
+        <button
           onClick={prevPage}
           disabled={currentPage === 0}
           className="p-4 rounded-full bg-white shadow-md text-amber-800 disabled:opacity-20 hover:shadow-xl hover:bg-amber-50 transition-all disabled:cursor-not-allowed group"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 group-hover:-translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
+          ‹
         </button>
 
         <div className="flex space-x-3">
           {BOOK_DATA.map((_, i) => (
-            <div 
-              key={i} 
+            <div
+              key={i}
               className={`h-2.5 rounded-full transition-all duration-500 ease-out shadow-inner ${i === currentPage ? 'bg-amber-600 w-10 ring-2 ring-amber-100' : 'bg-amber-200 w-2.5 hover:bg-amber-300'}`}
             />
           ))}
         </div>
 
-        <button 
+        <button
           onClick={nextPage}
           disabled={currentPage === BOOK_DATA.length - 1}
           className="p-4 rounded-full bg-white shadow-md text-amber-800 disabled:opacity-20 hover:shadow-xl hover:bg-amber-50 transition-all disabled:cursor-not-allowed group"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
+          ›
         </button>
       </div>
 
-      {/* Footer */}
-      <footer className="mt-12 text-center text-amber-800/40 text-[10px] uppercase tracking-widest font-bold">
-        <p>© 2024 Bíblia Infantil Ilustrada • Criado com Fé e Tecnologia</p>
+      <footer className="mt-8 text-center text-amber-700 text-xs">
+        Favoritos: {bookmarks.length} • Lidas: {readPages.length}/{BOOK_DATA.length}
       </footer>
     </div>
   );

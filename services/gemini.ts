@@ -1,9 +1,14 @@
+import { GoogleGenAI, Modality } from '@google/genai';
+import { MODEL_IMAGE, MODEL_TTS } from '../constants';
 
-import { GoogleGenAI, Modality } from "@google/genai";
-import { MODEL_IMAGE, MODEL_TTS } from "../constants";
+const getApiKey = () => {
+  const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
+  const legacyKey = import.meta.env.API_KEY;
+  return viteKey || legacyKey || '';
+};
 
 export const generateIllustration = async (prompt: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   try {
     const response = await ai.models.generateContent({
       model: MODEL_IMAGE,
@@ -12,7 +17,7 @@ export const generateIllustration = async (prompt: string): Promise<string> => {
       },
       config: {
         imageConfig: {
-          aspectRatio: "4:3",
+          aspectRatio: '4:3',
         },
       },
     });
@@ -22,15 +27,15 @@ export const generateIllustration = async (prompt: string): Promise<string> => {
         return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error("Nenhuma imagem gerada pelo modelo.");
+    throw new Error('Nenhuma imagem gerada pelo modelo.');
   } catch (error) {
-    console.error("Erro na geração de imagem:", error);
+    console.error('Erro na geração de imagem:', error);
     throw error;
   }
 };
 
 export const generateNarration = async (text: string): Promise<AudioBuffer> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const response = await ai.models.generateContent({
     model: MODEL_TTS,
     contents: [{ parts: [{ text: `Leia calmamente para uma criança: ${text}` }] }],
@@ -45,14 +50,13 @@ export const generateNarration = async (text: string): Promise<AudioBuffer> => {
   });
 
   const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (!base64Audio) throw new Error("Áudio não gerado.");
+  if (!base64Audio) throw new Error('Áudio não gerado.');
 
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
   const decodedData = decode(base64Audio);
   return await decodeAudioData(decodedData, audioContext, 24000, 1);
 };
 
-// Utils for Audio
 function decode(base64: string) {
   const binaryString = atob(base64);
   const len = binaryString.length;
